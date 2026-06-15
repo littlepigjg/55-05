@@ -186,6 +186,19 @@ class BookTableWidget(QWidget):
             if os.path.exists(path):
                 subprocess.Popen(f'explorer /select,"{path}"')
 
+    def select_book(self, book: BookMeta):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            if 0 <= idx < len(self._books):
+                if self._books[idx].file_path == book.file_path:
+                    self.table.selectRow(row)
+                    self.table.scrollToItem(self.table.item(row, 1))
+                    self._deselect_all()
+                    item.setCheckState(Qt.CheckState.Checked)
+                    self._notify_selection()
+                    return
+
     def _filter_table(self):
         keyword = self.search_edit.text().lower()
         fmt = self.format_filter.currentText()
