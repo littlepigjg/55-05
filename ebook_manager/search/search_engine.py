@@ -7,13 +7,14 @@ from datetime import datetime
 from typing import Optional, List, Dict, Callable, Tuple
 from whoosh import index, scoring
 from whoosh.fields import Schema, TEXT, ID, KEYWORD, NUMERIC, DATETIME
-from whoosh.qparser import QueryParser, MultifieldParser, PhrasePlugin, FuzzyTermPlugin
-from whoosh.qparser import syntax
+from whoosh.query import Every
 from whoosh.highlight import HtmlFormatter, ContextFragmenter, Highlighter
 from whoosh.writing import AsyncWriter, BufferedWriter
 
 from .analyzers import chinese_analyzer
 from .content_extractor import ContentExtractor
+from .filters import SearchFilters, FilterBuilder, filter_results
+from .query_builder import QueryBuilder
 from ..models import BookMeta
 
 
@@ -61,6 +62,9 @@ class SearchEngine:
             self.ix = index.open_dir(str(self.index_dir))
         else:
             self.ix = index.create_in(str(self.index_dir), self._schema)
+
+    def _init_query_builder(self):
+        self._query_builder = QueryBuilder(self._schema)
 
     def _load_meta(self):
         self._meta = {"indexed_files": {}, "last_optimize": None, "total_docs": 0}
@@ -207,19 +211,46 @@ class SearchEngine:
         except Exception:
             return False
 
-    def _parse_query(self, query_str: str, fieldnames: List[str]) -> "Query":
-        parser = MultifieldParser(
-            fieldnames,
-            schema=self.ix.schema,
-            group=syntax.OrGroup,
-        )
-        parser.add_plugin(PhrasePlugin())
-        parser.add_plugin(FuzzyTermPlugin())
-        return parser.parse(query_str)
+    def _build_filters(
+        self,
+        filter_formats: Optional[List[str]] = None,
+        filter_tags: Optional[List[str]] = None,
+        date_start: Optional[datetime] = None,
+        date_end: Optional[datetime] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        extra_filters: Optional[SearchFilters] = None,
+    ) -> SearchFilters:
+        builder = FilterBuilder()
+
+        if filter_formats:
+            builder.with_formats(filter_formats)
+        if filter_tags:
+            builder.with_tags(filter_tags)
+        if date_start or date_end:
+            builder.with_date_range(date_start, date_end)
+        if min_size or max_size:
+            builder.with_size_range(min_size, max_size)
+
+        if extra_filters and extra_filters.has_any():
+            if extra_filters.formats:
+                builder.with_formats(extra_filters.formats)
+            if extra_filters.tags:
+                builder.with_tags(extra_filters.tags)
+            if extra_filters.date_start or extra_filters.date_end:
+                builder.with_date_range(extra_filters.date_start, extra_filters.date_end)
+            if extra_filters.min_size or extra_filters.max_size:
+                builder.with_size_range(extra_filters.min_size, extra_filters.max_size)
+            if extra_filters.languages:
+                builder.with_languages(extra_filters.languages)
+            if extra_filters.publishers:
+                builder.with_publishers(extra_filters.publishers)
+
+        return builder.build()
 
     def search(
         self,
-        query_str: str,
+        query_str: str = "",
         limit: int = 50,
         filter_formats: Optional[List[str]] = None,
         filter_tags: Optional[List[str]] = None,
@@ -227,51 +258,46 @@ class SearchEngine:
         date_end: Optional[datetime] = None,
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
+        filters: Optional[SearchFilters] = None,
     ) -> List[Dict]:
-        if not query_str.strip():
-            return []
+        has_query = bool(query_str and query_str.strip())
+        search_filters = self._build_filters(
+            filter_formats, filter_tags,
+            date_start, date_end,
+            min_size, max_size,
+            filters
+        )
 
-        fieldnames = ["title", "author", "description", "content_body", "tags", "publisher"]
+        if not has_query and not search_filters.has_any():
+            return []
 
         try:
-            query = self._parse_query(query_str, fieldnames)
+            query = self._query_builder.build(query_str) if has_query else Every()
 
             with self.ix.searcher(weighting=scoring.BM25F(B=0.75, K1=1.5, content_B=1.0)) as searcher:
-                results = searcher.search(query, limit=limit, terms=True)
-                filtered_results = []
+                limit_for_search = max(limit, 1000) if search_filters.has_any() else limit
+                results = searcher.search(query, limit=limit_for_search, terms=True)
+                hit_list = [self._hit_to_result(hit) for hit in results]
 
-                for hit in results:
-                    ok = True
+                if search_filters.has_any():
+                    hit_list = filter_results(hit_list, search_filters)
+                    hit_list = hit_list[:limit]
 
-                    if filter_formats and hit.get("file_format") not in filter_formats:
-                        ok = False
-
-                    if filter_tags and hit.get("tags"):
-                        hit_tags = set(hit["tags"].split(","))
-                        if not hit_tags.intersection(set(filter_tags)):
-                            ok = False
-
-                    if date_start or date_end:
-                        pub_date = hit.get("publish_date")
-                        if pub_date:
-                            if date_start and pub_date < date_start:
-                                ok = False
-                            if date_end and pub_date > date_end:
-                                ok = False
-
-                    if min_size or max_size:
-                        file_size = hit.get("file_size", 0)
-                        if min_size and file_size < min_size:
-                            ok = False
-                        if max_size and file_size > max_size:
-                            ok = False
-
-                    if ok:
-                        filtered_results.append(self._hit_to_result(hit))
-
-                return filtered_results
+                return hit_list
         except Exception:
             return []
+
+    def search_with_filters(
+        self,
+        query_str: str = "",
+        filters: Optional[SearchFilters] = None,
+        limit: int = 50,
+    ) -> List[Dict]:
+        return self.search(
+            query_str=query_str,
+            limit=limit,
+            filters=filters,
+        )
 
     def _hit_to_result(self, hit) -> Dict:
         result = dict(hit)
@@ -290,8 +316,10 @@ class SearchEngine:
         max_chars: int = 500,
         surround: int = 50,
     ) -> Optional[str]:
-        fieldnames = ["title", "author", "description", "content_body"]
-        query = self._parse_query(query_str, fieldnames)
+        if not query_str or not query_str.strip():
+            return None
+
+        query = self._query_builder.build(query_str)
 
         with self.ix.searcher() as searcher:
             results = searcher.search(query, limit=1, terms=True, filter=lambda d: d["file_path"] == file_path)
