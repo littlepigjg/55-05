@@ -10,6 +10,14 @@ from .query_builder import (
     create_every_query,
     is_every_query,
 )
+from .filter_assembler import (
+    AdvancedSearchCriteria,
+    FilterAssembler,
+    SelectedItemsTracker,
+    convert_mb_to_bytes,
+    convert_bytes_to_mb,
+    format_file_size,
+)
 
 __all__ = [
     "SearchEngine",
@@ -25,4 +33,10 @@ __all__ = [
     "extract_keywords",
     "create_every_query",
     "is_every_query",
+    "AdvancedSearchCriteria",
+    "FilterAssembler",
+    "SelectedItemsTracker",
+    "convert_mb_to_bytes",
+    "convert_bytes_to_mb",
+    "format_file_size",
 ]

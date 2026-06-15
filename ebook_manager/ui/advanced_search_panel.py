@@ -8,6 +8,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QIcon
 
+from ..search.filter_assembler import (
+    FilterAssembler,
+    SelectedItemsTracker,
+    AdvancedSearchCriteria,
+    convert_mb_to_bytes,
+)
+
 
 class AdvancedSearchPanel(QWidget):
     search_requested = pyqtSignal(dict)
@@ -17,6 +24,8 @@ class AdvancedSearchPanel(QWidget):
         super().__init__(parent)
         self._all_tags: List[str] = []
         self._all_formats: List[str] = []
+        self._tag_tracker = SelectedItemsTracker()
+        self._format_tracker = SelectedItemsTracker()
         self._init_ui()
 
     def _init_ui(self):
@@ -277,6 +286,7 @@ class AdvancedSearchPanel(QWidget):
 
         self.tag_list = QListWidget()
         self.tag_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.tag_list.itemSelectionChanged.connect(self._update_tag_selection)
         self.tag_list.setStyleSheet("""
             QListWidget {
                 border: 1px solid #e0e0e0;
@@ -399,7 +409,7 @@ class AdvancedSearchPanel(QWidget):
 
     def set_available_tags(self, tags: List[str]):
         self._all_tags = tags
-        self._populate_tag_list(tags)
+        self._populate_tag_list(tags, preserve_selection=False)
 
     def set_available_formats(self, formats: List[str]):
         self._all_formats = formats
@@ -409,24 +419,57 @@ class AdvancedSearchPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, fmt)
             self.format_list.addItem(item)
 
-    def _populate_tag_list(self, tags: List[str]):
+    def _populate_tag_list(self, tags: List[str], preserve_selection: bool = True):
+        if preserve_selection:
+            self._save_tag_selection()
+
         self.tag_list.clear()
         for tag in tags:
             item = QListWidgetItem(f"🏷️  {tag}")
             item.setData(Qt.ItemDataRole.UserRole, tag)
             self.tag_list.addItem(item)
 
+        if preserve_selection:
+            self._restore_tag_selection()
+
+    def _save_tag_selection(self):
+        self._tag_tracker.save(self.tag_list)
+
+    def _update_tag_selection(self):
+        self._tag_tracker.update(self.tag_list)
+
+    def _restore_tag_selection(self):
+        self._tag_tracker.restore(self.tag_list)
+
+    def _save_format_selection(self):
+        self._format_tracker.save(self.format_list)
+
+    def _update_format_selection(self):
+        self._format_tracker.update(self.format_list)
+
+    def _restore_format_selection(self):
+        self._format_tracker.restore(self.format_list)
+
     def _filter_tags(self, text: str):
         text = text.lower()
         filtered = [t for t in self._all_tags if text in t.lower()]
-        self._populate_tag_list(filtered)
+
+        self.tag_list.clear()
+        for tag in filtered:
+            item = QListWidgetItem(f"🏷️  {tag}")
+            item.setData(Qt.ItemDataRole.UserRole, tag)
+            self.tag_list.addItem(item)
+
+        self._restore_tag_selection()
 
     def _select_all_tags(self):
         for i in range(self.tag_list.count()):
             item = self.tag_list.item(i)
             item.setSelected(True)
+        self._save_tag_selection()
 
     def _clear_tags(self):
+        self._tag_tracker.clear()
         for i in range(self.tag_list.count()):
             item = self.tag_list.item(i)
             item.setSelected(False)
@@ -452,74 +495,82 @@ class AdvancedSearchPanel(QWidget):
         self.min_size.setValue(0)
         self.max_size.setValue(1000)
 
+        self._tag_tracker.clear()
+        self._format_tracker.clear()
         for i in range(self.format_list.count()):
             self.format_list.item(i).setSelected(False)
         for i in range(self.tag_list.count()):
             self.tag_list.item(i).setSelected(False)
 
         self.tag_filter_edit.clear()
-        self._populate_tag_list(self._all_tags)
+        self._populate_tag_list(self._all_tags, preserve_selection=False)
 
         self.reset_requested.emit()
 
     def get_filters(self) -> Dict:
-        query_parts = []
+        self._save_tag_selection()
+        self._save_format_selection()
 
-        title = self.title_edit.text().strip()
-        if title:
-            query_parts.append(f"title:({title})")
+        selected_formats = self._format_tracker.get_selected()
+        selected_tags = self._tag_tracker.get_selected()
 
-        author = self.author_edit.text().strip()
-        if author:
-            query_parts.append(f"author:({author})")
+        date_start = FilterAssembler.parse_date_checkbox(
+            self.date_from_checkbox, self.date_from
+        )
+        date_end = FilterAssembler.parse_date_checkbox(
+            self.date_to_checkbox, self.date_to
+        )
+        min_size = FilterAssembler.parse_size_checkbox(
+            self.min_size_checkbox, self.min_size
+        )
+        max_size = FilterAssembler.parse_size_checkbox(
+            self.max_size_checkbox, self.max_size
+        )
 
-        publisher = self.publisher_edit.text().strip()
-        if publisher:
-            query_parts.append(f"publisher:({publisher})")
+        return FilterAssembler.assemble_filters(
+            title=self.title_edit.text(),
+            author=self.author_edit.text(),
+            publisher=self.publisher_edit.text(),
+            description=self.description_edit.text(),
+            search_content=self.content_checkbox.isChecked(),
+            selected_formats=selected_formats,
+            selected_tags=selected_tags,
+            date_start=date_start,
+            date_end=date_end,
+            min_size=min_size,
+            max_size=max_size,
+        )
 
-        description = self.description_edit.text().strip()
-        if description:
-            query_parts.append(f"description:({description})")
+    def get_criteria(self) -> AdvancedSearchCriteria:
+        self._save_tag_selection()
+        self._save_format_selection()
 
-        if self.content_checkbox.isChecked():
-            pass
+        return FilterAssembler.assemble_criteria(
+            title=self.title_edit.text(),
+            author=self.author_edit.text(),
+            publisher=self.publisher_edit.text(),
+            description=self.description_edit.text(),
+            search_content=self.content_checkbox.isChecked(),
+            formats=self._format_tracker.get_selected(),
+            tags=self._tag_tracker.get_selected(),
+            date_start=FilterAssembler.parse_date_checkbox(
+                self.date_from_checkbox, self.date_from
+            ),
+            date_end=FilterAssembler.parse_date_checkbox(
+                self.date_to_checkbox, self.date_to
+            ),
+            min_size_bytes=FilterAssembler.parse_size_checkbox(
+                self.min_size_checkbox, self.min_size
+            ),
+            max_size_bytes=FilterAssembler.parse_size_checkbox(
+                self.max_size_checkbox, self.max_size
+            ),
+        )
 
-        query = " AND ".join(query_parts) if query_parts else ""
+    def get_selected_tags(self) -> List[str]:
+        self._save_tag_selection()
+        return self._tag_tracker.get_selected()
 
-        selected_formats = []
-        for i in range(self.format_list.count()):
-            item = self.format_list.item(i)
-            if item.isSelected():
-                selected_formats.append(item.data(Qt.ItemDataRole.UserRole))
-
-        selected_tags = []
-        for i in range(self.tag_list.count()):
-            item = self.tag_list.item(i)
-            if item.isSelected():
-                selected_tags.append(item.data(Qt.ItemDataRole.UserRole))
-
-        date_start = None
-        if self.date_from_checkbox.isChecked():
-            date_start = self.date_from.date().toPyDate()
-
-        date_end = None
-        if self.date_to_checkbox.isChecked():
-            date_end = self.date_to.date().toPyDate()
-
-        min_size = None
-        if self.min_size_checkbox.isChecked():
-            min_size = self.min_size.value() * 1024 * 1024
-
-        max_size = None
-        if self.max_size_checkbox.isChecked():
-            max_size = self.max_size.value() * 1024 * 1024
-
-        return {
-            "query": query,
-            "formats": selected_formats,
-            "tags": selected_tags,
-            "date_start": date_start,
-            "date_end": date_end,
-            "min_size": min_size,
-            "max_size": max_size,
-        }
+    def get_selected_formats(self) -> List[str]:
+        self._save_format_selection()
+        return self._format_tracker.get_selected()
