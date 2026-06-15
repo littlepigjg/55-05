@@ -508,8 +508,8 @@ class AdvancedSearchPanel(QWidget):
         self.reset_requested.emit()
 
     def get_filters(self) -> Dict:
-        self._save_tag_selection()
-        self._save_format_selection()
+        self._update_tag_selection()
+        self._update_format_selection()
 
         selected_formats = self._format_tracker.get_selected()
         selected_tags = self._tag_tracker.get_selected()
@@ -542,8 +542,8 @@ class AdvancedSearchPanel(QWidget):
         )
 
     def get_criteria(self) -> AdvancedSearchCriteria:
-        self._save_tag_selection()
-        self._save_format_selection()
+        self._update_tag_selection()
+        self._update_format_selection()
 
         return FilterAssembler.assemble_criteria(
             title=self.title_edit.text(),
@@ -568,9 +568,9 @@ class AdvancedSearchPanel(QWidget):
         )
 
     def get_selected_tags(self) -> List[str]:
-        self._save_tag_selection()
+        self._update_tag_selection()
         return self._tag_tracker.get_selected()
 
     def get_selected_formats(self) -> List[str]:
-        self._save_format_selection()
+        self._update_format_selection()
         return self._format_tracker.get_selected()

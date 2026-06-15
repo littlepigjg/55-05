@@ -494,6 +494,114 @@ def test_size_conversion():
     print("✓ 大小转换通过")
 
 
+def test_get_selected_in_filtered_state():
+    print("\n=== 测试过滤状态下获取选中项 ===")
+    tracker = SelectedItemsTracker()
+    all_tags = ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+    list_widget = MockListWidget([(tag, False) for tag in all_tags])
+    list_widget.item(0).setSelected(True)
+    list_widget.item(1).setSelected(True)
+    list_widget.item(2).setSelected(True)
+    list_widget.item(3).setSelected(True)
+    tracker.save(list_widget)
+
+    assert sorted(tracker.get_selected()) == ["A", "B", "C", "D"]
+    print(f"  初始选中: {sorted(tracker.get_selected())}")
+
+    filtered = ["A", "B"]
+    list_widget.clear()
+    for tag in filtered:
+        list_widget.addItem(tag)
+    tracker.restore(list_widget)
+
+    assert list_widget.item(0).isSelected()
+    assert list_widget.item(1).isSelected()
+
+    list_widget.item(0).setSelected(False)
+    tracker.update(list_widget)
+
+    selected = tracker.get_selected()
+    assert sorted(selected) == ["B", "C", "D"]
+    print(f"  过滤状态下取消A后选中: {sorted(selected)}")
+    assert "A" not in selected
+    assert "B" in selected
+    assert "C" in selected
+    assert "D" in selected
+
+    list_widget.clear()
+    for tag in all_tags:
+        list_widget.addItem(tag)
+    tracker.restore(list_widget)
+
+    final_selected = []
+    for i in range(list_widget.count()):
+        if list_widget.item(i).isSelected():
+            final_selected.append(list_widget.item(i).data(32))
+
+    assert sorted(final_selected) == ["B", "C", "D"]
+    assert "A" not in final_selected
+
+    print("✓ 过滤状态下获取选中项测试通过")
+
+
+def test_filter_then_search_then_expand():
+    print("\n=== 测试过滤后取消勾选再展开 ===")
+    tracker = SelectedItemsTracker()
+    all_tags = ["Python编程", "Python进阶", "AI人工智能", "AI机器学习", "Java开发", "C++编程", "数据分析", "机器学习"]
+
+    list_widget = MockListWidget([(tag, False) for tag in all_tags])
+    list_widget.item(0).setSelected(True)
+    list_widget.item(1).setSelected(True)
+    list_widget.item(2).setSelected(True)
+    list_widget.item(4).setSelected(True)
+    tracker.save(list_widget)
+
+    expected_after_save = sorted(["Python编程", "Python进阶", "AI人工智能", "Java开发"])
+    assert tracker.get_selected() == expected_after_save
+    print(f"  初始勾选: {expected_after_save}")
+
+    filter_text = "python"
+    filtered = [t for t in all_tags if filter_text.lower() in t.lower()]
+    list_widget.clear()
+    for tag in filtered:
+        list_widget.addItem(tag)
+    tracker.restore(list_widget)
+
+    assert list_widget.count() == 2
+    assert list_widget.item(0).isSelected()
+    assert list_widget.item(1).isSelected()
+
+    list_widget.item(0).setSelected(False)
+    tracker.update(list_widget)
+
+    assert "Python编程" not in tracker
+    assert "Python进阶" in tracker
+    assert "AI人工智能" in tracker
+    assert "Java开发" in tracker
+    print(f"  过滤后取消Python编程，保留: {tracker.get_selected()}")
+
+    selected_from_tracker = tracker.get_selected()
+    assert len(selected_from_tracker) == 3
+
+    list_widget.clear()
+    for tag in all_tags:
+        list_widget.addItem(tag)
+    tracker.restore(list_widget)
+
+    final_selected = []
+    for i in range(list_widget.count()):
+        if list_widget.item(i).isSelected():
+            final_selected.append(list_widget.item(i).data(32))
+
+    expected_final = sorted(["Python进阶", "AI人工智能", "Java开发"])
+    assert sorted(final_selected) == expected_final
+    print(f"  展开后选中: {sorted(final_selected)}")
+    assert "Python编程" not in final_selected
+
+    print("✓ 过滤后取消勾选再展开测试通过")
+
+
 def test_real_world_scenario():
     print("\n=== 测试真实场景：用户勾选标签后过滤 ===")
 
@@ -577,6 +685,8 @@ def run_all_tests():
     test_advanced_search_criteria_to_from_dict()
     test_advanced_search_criteria_to_search_params()
     test_size_conversion()
+    test_get_selected_in_filtered_state()
+    test_filter_then_search_then_expand()
     test_real_world_scenario()
 
     print("\n" + "=" * 70)
